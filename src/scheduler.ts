@@ -111,17 +111,20 @@ export async function runSearch(
 
   // 插件各自完成后立即写入结果（软截止时间到达时已完成的自然保留）
   const tasks = active.map(async (p) => {
+    const t0 = Date.now();
     try {
       const list = filterInvalid(await p.search(keyword, env, ctxFor(p.name)));
       sources[p.name] = list.length;
       results.push(...list);
       done.add(p.name);
+      debug.push(`timing: ${p.name} ${Date.now() - t0}ms (${list.length})`);
       if (list.length > 0) recordSuccess(p.name);
     } catch (e) {
       sources[p.name] = 0;
       done.add(p.name);
       recordFailure(p.name);
       errors.push(`${p.name}: ${String(e).slice(0, 200)}`);
+      debug.push(`timing: ${p.name} ${Date.now() - t0}ms (error)`);
       console.error(`[pansou-cf] plugin ${p.name} failed: ${e}`);
     }
   });
