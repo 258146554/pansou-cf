@@ -39,6 +39,14 @@ export interface HtmlSiteConfig {
 
 const ANCHOR_RE = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
 const DEFAULT_UA = UA;
+/** 单次抓取超时（与请求级 signal 取先到者） */
+const FETCH_TIMEOUT_MS = 8_000;
+
+/** 把请求级取消信号并入本地超时，任一触发即中断 */
+function withSignal(signal?: AbortSignal): AbortSignal {
+  const local = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([local, signal]) : local;
+}
 
 function fnv1a(s: string): string {
   let h = 0x811c9dc5;
@@ -60,6 +68,7 @@ async function fetchText(
   referer: string,
   method: 'GET' | 'POST',
   body: string | undefined,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const resp = await fetch(url, {
@@ -71,7 +80,7 @@ async function fetchText(
         Referer: referer,
       },
       body: method === 'POST' ? body : undefined,
-      signal: AbortSignal.timeout(12_000),
+      signal: withSignal(signal),
       redirect: 'follow',
     });
     if (!resp.ok) {
@@ -115,6 +124,7 @@ export function makeHtmlPlugin(cfg: HtmlSiteConfig): SearchPlugin {
         cfg.base,
         cfg.method ?? 'GET',
         cfg.body ? cfg.body.replace('{kw}', kw) : undefined,
+        ctx?.signal,
       );
       if (!html) {
         if (ctx?.debug) ctx.debug.push(`${cfg.name}: search-page fetch failed`);
@@ -141,9 +151,11 @@ export function makeHtmlPlugin(cfg: HtmlSiteConfig): SearchPlugin {
 
       const results: SearchResult[] = [];
       for (const d of details) {
+        // 请求已被取消（软截止到达）→ 立即停止，避免挂起子请求拖住整体响应
+        if (ctx?.signal?.aborted) break;
         // 子请求预算：耗尽即停（免费版 50 fetch/请求）
         if (ctx && !ctx.budget.take()) break;
-        const page = await fetchText(cfg.name, d.url, cfg.encoding, d.url, 'GET', undefined);
+        const page = await fetchText(cfg.name, d.url, cfg.encoding, d.url, 'GET', undefined, ctx?.signal);
         if (!page) {
           if (ctx?.debug) ctx.debug.push(`${cfg.name}: detail fetch failed ${d.url.slice(0, 60)}`);
           continue;

@@ -100,16 +100,18 @@ export async function runSearch(
   for (const p of plugins) sources[p.name] = 0;
 
   const budget = makeBudget(30);
+  const ac = new AbortController();
   const ctxFor = (name: string): SearchContext => ({
     budget,
     debug,
+    signal: ac.signal,
     fail: (reason?: string) => {
       recordFailure(name);
       if (reason) debug.push(`circuit-fail: ${name} ${reason}`);
     },
   });
 
-  // 插件各自完成后立即写入结果（软截止时间到达时已完成的自然保留）
+  // 插件各自完成后立即写入结果（软截止到达时已完成的自然保留）
   const tasks = active.map(async (p) => {
     const t0 = Date.now();
     try {
@@ -122,32 +124,32 @@ export async function runSearch(
     } catch (e) {
       sources[p.name] = 0;
       done.add(p.name);
-      recordFailure(p.name);
-      errors.push(`${p.name}: ${String(e).slice(0, 200)}`);
-      debug.push(`timing: ${p.name} ${Date.now() - t0}ms (error)`);
-      console.error(`[pansou-cf] plugin ${p.name} failed: ${e}`);
+      const aborted = ac.signal.aborted || (e instanceof Error && e.name === 'AbortError');
+      debug.push(`timing: ${p.name} ${Date.now() - t0}ms (${aborted ? 'aborted' : 'error'})`);
+      // 被软截止取消的源不计熔断失败（不是源站的问题）
+      if (!aborted) {
+        recordFailure(p.name);
+        errors.push(`${p.name}: ${String(e).slice(0, 200)}`);
+        console.error(`[pansou-cf] plugin ${p.name} failed: ${e}`);
+      }
     }
   });
 
-  // 软截止：慢源不再拖累整体响应（原版 PanSou 的"尽快响应"思路）
-  // 超时后未完成的插件被记录并从结果中排除，请求结束后其后续动作随响应一起结束。
+  // 软截止：到达后 abort 请求级信号 —— 插件内的 fetch 会被真正中断，
+  // 否则 Workers 会等挂起的子请求结束才收尾，反而更慢。
   const deadlineMs = opts?.deadlineMs ?? 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   if (deadlineMs > 0) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, deadlineMs);
-    });
-    await Promise.race([Promise.all(tasks), timeout]);
-    if (timer) clearTimeout(timer);
-    if (timedOut) {
-      const pending = active.filter((p) => !done.has(p.name)).map((p) => p.name);
-      if (pending.length > 0) debug.push(`deadline ${deadlineMs}ms hit, pending: ${pending.join(',')}`);
-    }
-  } else {
-    await Promise.all(tasks);
+    timer = setTimeout(() => {
+      timedOut = true;
+      ac.abort();
+    }, deadlineMs);
+  }
+  await Promise.all(tasks);
+  if (timer) clearTimeout(timer);
+  if (timedOut) {
+    const pending = active.filter((p) => !done.has(p.name)).map((p) => p.name);
+    if (pending.length > 0) debug.push(`deadline ${deadlineMs}ms hit, pending: ${pending.join(',')}`);
   }
 
   return { results, sources, errors, debug };

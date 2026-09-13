@@ -23,6 +23,12 @@ export interface SearchContext {
    * 偶发的单次抓取失败不必上报，调度器只对抛出的异常自动计数。
    */
   fail(reason?: string): void;
+  /**
+   * 请求级取消信号（调度器在软截止时间到达时 abort）。
+   * 做 fetch 的插件应把它并入自己的超时信号：AbortSignal.any([AbortSignal.timeout(ms), ctx.signal])。
+   * 作用：Workers 会等待挂起的子请求结束才真正结束本次请求，不取消会把整体响应拖慢。
+   */
+  signal?: AbortSignal;
 }
 
 export interface SearchPlugin {
