@@ -6,7 +6,7 @@ compatibility_date = "2026-09-06"
 # 把它的 id 替换到下面；不需要缓存可整段删除，程序自动降级为直连搜索
 [[kv_namespaces]]
 binding = "CACHE"
-id = "b53422454d744d0c8af9d10ec92e06b5"
+id = "2a5f006a5533497fbb5bd107d188fbda"
 
 [vars]
 ENV = "production"
